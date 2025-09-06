@@ -344,6 +344,9 @@ def nifty_history():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/')
+def home():
+    return "hello world!"
 
 # -------------------- Run App --------------------
 if __name__ == '__main__':
