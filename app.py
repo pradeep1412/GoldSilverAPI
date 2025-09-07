@@ -53,7 +53,6 @@ def get_goodreturns_prices():
             "platinum": {"unit": "1 gram", "price": platinum_price},
             "nifty": nifty_price,
             "currency": "INR",
-            "source": "GoodReturns",
         }
 
         return result
