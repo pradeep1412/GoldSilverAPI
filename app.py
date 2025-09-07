@@ -1,22 +1,10 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 import requests
 from bs4 import BeautifulSoup
-import re
-import time
 import logging
-from datetime import datetime
-from functools import lru_cache
-import sqlite3
-from apscheduler.schedulers.background import BackgroundScheduler
-import atexit
-import time
-import logging
-from datetime import datetime
-from contextlib import closing
 
 # -------------------- App Setup --------------------
 app = Flask(__name__)
-CACHE_TIMEOUT = 300  # Cache prices for 5 minutes
 
 # Configure logging
 logging.basicConfig(
@@ -24,92 +12,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
-# -------------------- DB Init --------------------
-def init_db():
-    with closing(sqlite3.connect('metal_prices.db')) as conn:
-        cursor = conn.cursor()
-
-        # ---------------- Gold ----------------
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS gold_prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                price_24k REAL,
-                price_22k REAL,
-                price_18k REAL,
-                unit TEXT,
-                city TEXT,
-                source TEXT,
-                timestamp INTEGER
-            )
-        ''')
-
-        # ---------------- Silver ----------------
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS silver_prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                price REAL,
-                unit TEXT,
-                city TEXT,
-                source TEXT,
-                timestamp INTEGER
-            )
-        ''')
-
-        # ---------------- Platinum ----------------
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS platinum_prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                price REAL,
-                unit TEXT,
-                city TEXT,
-                source TEXT,
-                timestamp INTEGER
-            )
-        ''')
-
-        # ---------------- Nifty ----------------
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS nifty_prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                price REAL,
-                source TEXT,
-                timestamp INTEGER
-            )
-        ''')
-
-        conn.commit()
-
-
-init_db()
-
-scheduler = BackgroundScheduler()
-
-def scheduled_price_fetch():
-    logging.info("Scheduled job: Fetching metal prices...")
-    prices = get_goodreturns_prices()
-    if prices:
-        store_prices_in_db(prices)
-        logging.info("Scheduled job: Prices saved to DB")
-    else:
-        logging.warning("Scheduled job: Failed to fetch prices")
-
-# Run every 1 hour
-scheduler.add_job(func=scheduled_price_fetch, trigger="interval", hours=1)
-
-# Start scheduler
-scheduler.start()
-
-# Shut down scheduler when exiting
-atexit.register(lambda: scheduler.shutdown())
-
-
 # -------------------- Scraping --------------------
 def get_goodreturns_prices():
-    """Scrape gold, silver, platinum, nifty prices and save in DB"""
+    """Scrape gold, silver, platinum, nifty prices directly from GoodReturns"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
 
@@ -150,203 +55,52 @@ def get_goodreturns_prices():
             "currency": "INR",
             "source": "GoodReturns",
         }
-        logging.info("fetch")
-
-        # ✅ Store into DB
-        store_prices_in_db(result)
 
         return result
 
     except Exception as e:
         logging.error(f"Scraping error: {str(e)}")
-        return None
+        return {"error": str(e)}
 
 
-# -------------------- Database Store --------------------
-def store_prices_in_db(prices):
-    try:
-        with closing(sqlite3.connect('metal_prices.db')) as conn:
-            cursor = conn.cursor()
-            current_time = int(time.time())
-            current_date = datetime.now().strftime('%Y-%m-%d')
+# -------------------- Endpoints --------------------
+@app.route('/api/gold', methods=['GET'])
+def gold():
+    data = get_goodreturns_prices()
+    if "error" in data:
+        return jsonify(data), 500
+    return jsonify(data["gold"])
 
-            # Gold
-            if 'gold' in prices:
-                cursor.execute('''
-                    INSERT INTO gold_prices (date, price_24k, price_22k, price_18k, unit, city, source, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    current_date,
-                    prices['gold'].get('24k'),
-                    prices['gold'].get('22k'),
-                    prices['gold'].get('18k'),
-                    prices['gold']['unit'],
-                    'National Average',
-                    prices['source'],
-                    current_time
-                ))
+@app.route('/api/silver', methods=['GET'])
+def silver():
+    data = get_goodreturns_prices()
+    if "error" in data:
+        return jsonify(data), 500
+    return jsonify(data["silver"])
 
-            # Silver
-            if 'silver' in prices:
-                cursor.execute('''
-                    INSERT INTO silver_prices (date, price, unit, city, source, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (
-                    current_date,
-                    prices['silver']['price'],
-                    prices['silver']['unit'],
-                    'National Average',
-                    prices['source'],
-                    current_time
-                ))
+@app.route('/api/platinum', methods=['GET'])
+def platinum():
+    data = get_goodreturns_prices()
+    if "error" in data:
+        return jsonify(data), 500
+    return jsonify(data["platinum"])
 
-            # Platinum
-            if 'platinum' in prices:
-                cursor.execute('''
-                    INSERT INTO platinum_prices (date, price, unit, city, source, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (
-                    current_date,
-                    prices['platinum']['price'],
-                    prices['platinum']['unit'],
-                    'National Average',
-                    prices['source'],
-                    current_time
-                ))
+@app.route('/api/nifty', methods=['GET'])
+def nifty():
+    data = get_goodreturns_prices()
+    if "error" in data:
+        return jsonify(data), 500
+    return jsonify({"nifty": data["nifty"]})
 
-            # Nifty
-            if 'nifty' in prices:
-                cursor.execute('''
-                    INSERT INTO nifty_prices (date, price, source, timestamp)
-                    VALUES (?, ?, ?, ?)
-                ''', (
-                    current_date,
-                    prices['nifty'],
-                    prices['source'],
-                    current_time
-                ))
-
-            conn.commit()
-            logging.info("Prices stored in DB")
-
-    except Exception as e:
-        logging.error(f"DB insert error: {str(e)}")
-
-
-# -------------------- DB Endpoints --------------------
-from flask import request
-
-@app.route('/api/history/gold', methods=['GET'])
-def gold_history():
-    try:
-        date_filter = request.args.get("date")  # optional query param
-        with closing(sqlite3.connect('metal_prices.db')) as conn:
-            cursor = conn.cursor()
-            if date_filter:
-                cursor.execute("""
-                    SELECT date, price_24k, price_22k, price_18k, unit, city, source
-                    FROM gold_prices
-                    WHERE date = ?
-                    ORDER BY id DESC
-                """, (date_filter,))
-            else:
-                cursor.execute("""
-                    SELECT date, price_24k, price_22k, price_18k, unit, city, source
-                    FROM gold_prices
-                    ORDER BY id DESC LIMIT 50
-                """)
-            rows = cursor.fetchall()
-        return jsonify([{
-            "date": r[0], "24k": r[1], "22k": r[2], "18k": r[3],
-            "unit": r[4], "city": r[5]
-        } for r in rows])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/history/silver', methods=['GET'])
-def silver_history():
-    try:
-        date_filter = request.args.get("date")
-        with closing(sqlite3.connect('metal_prices.db')) as conn:
-            cursor = conn.cursor()
-            if date_filter:
-                cursor.execute("""
-                    SELECT date, price, unit, city, source
-                    FROM silver_prices
-                    WHERE date = ?
-                    ORDER BY id DESC
-                """, (date_filter,))
-            else:
-                cursor.execute("""
-                    SELECT date, price, unit, city, source
-                    FROM silver_prices
-                    ORDER BY id DESC LIMIT 50
-                """)
-            rows = cursor.fetchall()
-        return jsonify([{
-            "date": r[0], "price": r[1], "unit": r[2], "city": r[3]
-        } for r in rows])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/history/platinum', methods=['GET'])
-def platinum_history():
-    try:
-        date_filter = request.args.get("date")
-        with closing(sqlite3.connect('metal_prices.db')) as conn:
-            cursor = conn.cursor()
-            if date_filter:
-                cursor.execute("""
-                    SELECT date, price, unit, city, source
-                    FROM platinum_prices
-                    WHERE date = ?
-                    ORDER BY id DESC
-                """, (date_filter,))
-            else:
-                cursor.execute("""
-                    SELECT date, price, unit, city, source
-                    FROM platinum_prices
-                    ORDER BY id DESC LIMIT 50
-                """)
-            rows = cursor.fetchall()
-        return jsonify([{
-            "date": r[0], "price": r[1], "unit": r[2], "city": r[3]
-        } for r in rows])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/history/nifty', methods=['GET'])
-def nifty_history():
-    try:
-        date_filter = request.args.get("date")
-        with closing(sqlite3.connect('metal_prices.db')) as conn:
-            cursor = conn.cursor()
-            if date_filter:
-                cursor.execute("""
-                    SELECT date, price, source
-                    FROM nifty_prices
-                    WHERE date = ?
-                    ORDER BY id DESC
-                """, (date_filter,))
-            else:
-                cursor.execute("""
-                    SELECT date, price, source
-                    FROM nifty_prices
-                    ORDER BY id DESC LIMIT 50
-                """)
-            rows = cursor.fetchall()
-        return jsonify([{
-            "date": r[0], "price": r[1]
-        } for r in rows])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+@app.route('/api/all', methods=['GET'])
+def all_prices():
+    data = get_goodreturns_prices()
+    return jsonify(data)
 
 @app.route('/')
 def home():
-    return "hello world!"
+    return "Hello World! Metal Prices API is running 🚀"
+
 
 # -------------------- Run App --------------------
 if __name__ == '__main__':
